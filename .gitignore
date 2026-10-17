@@ -1,0 +1,9 @@
+__pycache__/
+.ipynb_checkpoints/
+.venv/
+# scratch folder used when re-running the original notebook
+original/_run/
+# Release Board pipeline runs (status + log)
+.run/
+# personal interview notes, not part of the submission
+docs/INTERVIEW_GUIDE.md
