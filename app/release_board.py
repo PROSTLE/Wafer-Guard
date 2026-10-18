@@ -252,3 +252,107 @@ def inject_css() -> None:
     st.html("<style>@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600"
             "&family=IBM+Plex+Mono:wght@400;500&display=swap');"
             f":root{{{root}}}{CSS}</style>")
+
+
+# ---------------------------------------------------------------- small helpers
+def esc(x) -> str:
+    return html.escape(str(x))
+
+
+def mtime(p: Path) -> float:
+    return p.stat().st_mtime if p.exists() else 0.0
+
+
+def stamp(t: float) -> str:
+    return datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "–"
+
+
+def go(page: str, **state) -> None:
+    """Navigate (used as an on_click callback); `state` pre-sets widgets on the target page."""
+    ss.page = page
+    for k, v in state.items():
+        if v is None:
+            ss.pop(k, None)
+        else:
+            ss[k] = v
+
+
+def card_title(title: str, sub: str = "") -> None:
+    st.html(f'<div class="wg-card-title">{title}<span class="wg-card-sub">{sub}</span></div>')
+
+
+def note(text: str) -> None:
+    st.html(f'<div class="wg-note">{text}</div>')
+
+
+def page_header(title: str, sub: str) -> None:
+    st.html(f'<div class="wg-page-title">{esc(title)}</div><div class="wg-page-sub">{sub}</div>')
+
+
+def tiles(items: list[tuple[str, str, str]]) -> str:
+    return '<div class="wg-tiles">' + "".join(
+        f'<div class="wg-tile"><div class="wg-tile-label">{esc(a)}</div><div class="wg-tile-value">{b}</div>'
+        f'<div class="wg-tile-sub">{c}</div></div>' for a, b, c in items) + "</div>"
+
+
+def table(df: pd.DataFrame, fmt: dict | None = None, highlight=None) -> str:
+    """HTML table that follows the board's theme. `fmt` maps column -> format spec or callable returning HTML."""
+    fmt = fmt or {}
+    head = "".join(f"<th>{esc(c)}</th>" for c in df.columns)
+    rows = []
+    for _, r in df.astype(object).iterrows():  # astype(object) keeps ints as ints
+        cells = []
+        for c in df.columns:
+            v, f = r[c], fmt.get(c)
+            numeric = isinstance(v, (int, float, np.number)) and not isinstance(v, (bool, np.bool_))
+            if callable(f):
+                s = f(v)
+            elif v is None or (numeric and isinstance(v, float) and math.isnan(v)):
+                s = "–"
+            elif f and numeric:
+                s = esc(format(v, f))
+            else:
+                s = esc(v)
+            cells.append(f'<td class="{"num" if numeric else ""}">{s}</td>')
+        cls = ' class="hl"' if highlight is not None and highlight(r) else ""
+        rows.append(f"<tr{cls}>{''.join(cells)}</tr>")
+    return (f'<div class="wg-table-wrap"><table class="wg-table"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>')
+
+
+def legend(items: list[tuple[str, str]]) -> str:
+    return '<div class="wg-legend">' + "".join(f'<span><i style="background:{c}"></i>{esc(l)}</span>'
+                                               for l, c in items) + "</div>"
+
+
+def chart(c, height: int = 260) -> None:
+    """Render an Altair chart in the board's theme."""
+    c = (c.properties(height=height, background="transparent")
+         .configure(font=FONT)
+         .configure_view(strokeWidth=0)
+         .configure_axis(labelColor=T["text2"], titleColor=T["text2"], gridColor=T["grid"], domainColor=T["border"],
+                         tickColor=T["border"], labelFontSize=11, titleFontSize=11, titleFontWeight=500)
+         .configure_legend(labelColor=T["text2"], titleColor=T["text2"], labelFontSize=11, orient="top",
+                           symbolType="square")
+         .configure_title(color=T["text"]))
+    st.altair_chart(c, theme=None, width="stretch")
+
+
+def figure(name: str, caption: str) -> None:
+    path = FIGS / f"{name}.png"
+    if path.exists():
+        st.image(str(path), caption=caption, width="stretch")
+    else:
+        note(f"results/figures/{esc(name)}.png not found. Run the repaired notebook.")
+
+
+def sci(v: float) -> str:
+    return f"{v:.2e}"
+
+
+def outcome(defect: int, flagged: bool) -> str:
+    return {(1, True): "TP", (0, True): "FP", (1, False): "FN", (0, False): "TN"}[(int(defect), bool(flagged))]
+
+
+def outcome_chip(o: str) -> str:
+    return f'<span class="c-{o.lower()}">{o}</span>'
