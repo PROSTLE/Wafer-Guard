@@ -411,3 +411,58 @@ def read_csv(path: str, mt: float) -> pd.DataFrame | None:
 @st.cache_data(show_spinner=False)
 def audit_text(mt: float) -> str:
     return AUDIT.read_text(encoding="utf-8") if mt else ""
+
+
+# ---------------------------------------------------------------- pipeline runs
+@st.cache_resource
+def runs() -> dict:
+    """The pipeline process started from this server (shared by every browser session)."""
+    return {}
+
+
+def read_run_status() -> dict | None:
+    try:
+        return json.loads(run_pipeline.STATUS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def active_run() -> bool:
+    proc = runs().get("proc")
+    return proc is not None and proc.poll() is None
+
+
+def start_run(keys: list[str]) -> None:
+    if active_run():
+        return
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    proc = subprocess.Popen([sys.executable, str(run_pipeline.__file__), *keys], cwd=ROOT,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+    runs().update(proc=proc, keys=keys, started=datetime.now().replace(microsecond=0))
+
+
+def run_view() -> dict:
+    """State of the latest pipeline run: running / done / failed / unknown / None (never run)."""
+    s, reg = read_run_status(), runs()
+    if active_run():
+        if s is None or datetime.fromisoformat(s["started"]) < reg["started"]:
+            return dict(state="running", idx=1, n=len(reg["keys"]), label="starting", status=None)
+        cur = next((i for i, x in enumerate(s["steps"]) if x["state"] == "running"), 0)
+        return dict(state="running", idx=cur + 1, n=len(s["steps"]), label=s["steps"][cur]["label"], status=s)
+    if s is None:
+        return dict(state=None, status=None)
+    if s["state"] == "running":  # status file left by a run this server did not start (or one that was killed)
+        return dict(state="unknown", status=s)
+    return dict(state=s["state"], status=s)
+
+
+@st.dialog("Run the pipeline", width="medium")
+def run_dialog() -> None:
+    st.markdown("Runs the project's own scripts in the background, in this order. Their outputs "
+                "(`original/bnypi_executed.ipynb`, `results/`, `artifacts/`, `AUDIT.md`) are **overwritten**; "
+                "the board refreshes itself when the run ends. The full run takes several minutes on a laptop CPU.")
+    keys = [k for k, (label, script) in run_pipeline.STEPS.items()
+            if st.checkbox(f"**{label}** · `scripts/{script}`", value=True, key=f"dlg_{k}")]
+    if st.button("Start run", type="primary", icon=":material/play_arrow:", disabled=not keys or active_run()):
+        start_run(keys)
+        st.rerun()
