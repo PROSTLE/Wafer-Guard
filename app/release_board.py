@@ -356,3 +356,58 @@ def outcome(defect: int, flagged: bool) -> str:
 
 def outcome_chip(o: str) -> str:
     return f'<span class="c-{o.lower()}">{o}</span>'
+
+
+# ---------------------------------------------------------------- data (cached on file modification times)
+@st.cache_data(show_spinner=False)
+def read_metrics(mt: float) -> dict:
+    return json.loads(METRICS.read_text(encoding="utf-8"))
+
+
+@st.cache_resource(show_spinner="Scoring every wafer with the saved model…")
+def live_model(mts: tuple) -> dict:
+    """Load artifacts/, re-score every wafer and check the result against metrics.json."""
+    R = read_metrics(mts[0])
+    try:
+        b = inference.build(R)
+    except Exception as exc:  # missing / incompatible artifacts must not take the whole board down
+        return dict(error=f"{type(exc).__name__}: {exc}")
+    b["verify"] = inference.verify(b["scored"], R)
+    return b
+
+
+@st.cache_data(show_spinner=False)
+def original_log(mt: float) -> dict | None:
+    """What the ORIGINAL notebook printed when we executed it (scripts/run_original.py)."""
+    if not ORIGINAL_RUN.exists():
+        return None
+    nb = json.loads(ORIGINAL_RUN.read_text(encoding="utf-8"))
+    text = "".join("".join(o.get("text", "")) for c in nb["cells"] for o in c.get("outputs", [])
+                   if o.get("output_type") == "stream")
+    ep = re.findall(r"epoch (\d+)/(\d+) \| total ([\d.]+) \| recon ([\d.]+) \| clf ([\d.]+)", text)
+    loss = pd.DataFrame([dict(epoch=int(e), total=float(t), recon=float(r), clf=float(c)) for e, _, t, r, c in ep])
+    m = re.search(r"F1 ([\d.]+) \| precision ([\d.]+) \| recall ([\d.]+) \| ROC-AUC ([\d.]+) \| AP ([\d.]+)", text)
+    reported = dict(zip(["f1", "precision", "recall", "roc_auc", "ap"], map(float, m.groups()))) if m else None
+    cm = re.search(r"TN=(\d+)\s+FP=(\d+)\s+FN=(\d+)\s+TP=(\d+)", text)
+    confusion = dict(zip(["tn", "fp", "fn", "tp"], map(int, cm.groups()))) if cm else None
+    return dict(loss=loss, reported=reported, confusion=confusion, text=text)
+
+
+@st.cache_data(show_spinner=False)
+def readme(mt: float) -> dict:
+    text = README.read_text(encoding="utf-8") if README.exists() else ""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    title = lines[0].lstrip("# ") if lines else ""
+    name, _, subtitle = title.partition(": ")
+    cmd = re.search(r"## Reproduce everything.*?```bash\n(.*?)```", text, re.S)
+    return dict(text=text, name=name, subtitle=subtitle, commands=cmd.group(1).strip() if cmd else "")
+
+
+@st.cache_data(show_spinner=False)
+def read_csv(path: str, mt: float) -> pd.DataFrame | None:
+    return pd.read_csv(path) if mt else None
+
+
+@st.cache_data(show_spinner=False)
+def audit_text(mt: float) -> str:
+    return AUDIT.read_text(encoding="utf-8") if mt else ""
