@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 132" width="120" height="132" role="img" aria-label="Wafer Guard logo">
+  <title>Wafer Guard</title>
+  <defs>
+    <clipPath id="wafer">
+      <path d="M53 93.2A32 32 0 1 1 67 93.2z"/>
+    </clipPath>
+  </defs>
+  <!-- shield -->
+  <path d="M60 4 108 20v40c0 32-20.5 55.5-48 68C32.5 115.5 12 92 12 60V20z" fill="#2563eb"/>
+  <path d="M60 11.5 101 25.2V60c0 27.6-17.3 48.3-41 60.2C36.3 108.3 19 87.6 19 60V25.2z" fill="#1d4ed8"/>
+  <!-- wafer with its orientation flat -->
+  <path d="M53 93.2A32 32 0 1 1 67 93.2z" fill="#eff6ff"/>
+  <!-- die grid -->
+  <g clip-path="url(#wafer)" stroke="#93c5fd" stroke-width="1.6">
+    <path d="M28 41h64M28 51h64M28 61h64M28 71h64M28 81h64"/>
+    <path d="M38 28v66M48 28v66M58 28v66M68 28v66M78 28v66M88 28v66"/>
+  </g>
+  <!-- the one die the model caught -->
+  <rect x="68.8" y="51.8" width="8.4" height="8.4" rx="1.2" fill="#dc2626"/>
+</svg>
