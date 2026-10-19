@@ -99,3 +99,8 @@ Determinism: seeds are fixed, so re-running the notebook on the same versions re
 - **Small test set.** Few defects in the test block → wide confidence intervals; walk-forward evaluation and
   five seeds are reported alongside the single hold-out.
 - **PS-L wafers** have no failures in this data, so the model's behaviour on a failing PS-L wafer is untested.
+
+## External libraries
+PyTorch, scikit-learn, imbalanced-learn (SMOTE), pandas, NumPy, Matplotlib, joblib, Streamlit, Altair,
+nbformat / nbclient (headless notebook execution). Dataset: the task's `secom_telemetry_modified.csv`
+(a modified version of the UCI SECOM dataset).
