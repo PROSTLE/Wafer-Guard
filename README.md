@@ -53,3 +53,7 @@ WaferGuard/
     ├── render_audit.py          # metrics.json -> AUDIT.md
     └── run_pipeline.py          # runs the three steps above in order (the board's "Run Pipeline" button)
 ```
+
+## Prerequisites
+- Python 3.11+ (results were produced with Python 3.13 on CPU; no GPU needed)
+- ~1 GB disk for PyTorch
