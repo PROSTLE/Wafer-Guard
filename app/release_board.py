@@ -466,3 +466,68 @@ def run_dialog() -> None:
     if st.button("Start run", type="primary", icon=":material/play_arrow:", disabled=not keys or active_run()):
         start_run(keys)
         st.rerun()
+
+
+# ---------------------------------------------------------------- load everything
+inject_css()
+RD = readme(mtime(README))
+
+if not METRICS.exists():
+    st.html(f'<div class="wg-page-title">{esc(RD["name"] or "Wafer Guard")}</div>')
+    st.error("results/metrics.json not found. Run the pipeline (or `python scripts/run_notebook.py`) first.")
+    if st.button("Run Pipeline", type="primary", icon=":material/play_arrow:", disabled=active_run()):
+        run_dialog()
+    v = run_view()
+    if v["state"] == "running":
+        st.info(f"Pipeline running · step {v['idx']}/{v['n']}: {v['label']}. Refresh the page when it finishes.")
+    st.stop()
+
+R = read_metrics(mtime(METRICS))
+orig, rep, gate = R["original"], R["repaired_test"], R["release_gate"]
+boot, seeds, wf = R["repaired_test_bootstrap"], R["repaired_test_seeds"], R["walk_forward"]
+no_skill = R["baseline_no_skill_ap"]
+LIVE = live_model((mtime(METRICS), mtime(inference.MODEL_PATH), mtime(inference.PREPROCESSOR_PATH),
+                   mtime(inference.DATA)))
+LIVE_OK = "error" not in LIVE
+OLOG = original_log(mtime(ORIGINAL_RUN))
+
+
+def require_live() -> bool:
+    if not LIVE_OK:
+        st.error(f"The saved model could not be loaded, so live wafer scores are unavailable. {LIVE['error']}")
+    return LIVE_OK
+
+
+def pipeline_steps() -> list[dict]:
+    """The four stages of the audit, each checked against the files on disk."""
+    m_metrics = mtime(METRICS)
+    reported = OLOG["reported"] if OLOG else None
+    ok1 = reported is not None and abs(reported["f1"] - orig["f1"]) <= 5e-5 + 1e-12  # log prints 4 decimals
+    s1 = dict(title="Original notebook reproduced", state="done" if ok1 else ("warn" if OLOG else "todo"),
+              detail=(f"logged F1 {reported['f1']:.4f}" if reported else "not run yet"), when=mtime(ORIGINAL_RUN))
+    ok2 = LIVE_OK and LIVE["verify"]["ok"]
+    s2 = dict(title="Repaired pipeline verified", state="done" if ok2 else "warn",
+              detail="live re-score matches" if ok2 else "re-score mismatch", when=m_metrics)
+    m_audit = mtime(AUDIT)
+    s3 = dict(title="Audit report generated", state="done" if m_audit >= m_metrics else ("warn" if m_audit else "todo"),
+              detail="AUDIT.md up to date" if m_audit >= m_metrics else
+              ("older than metrics.json" if m_audit else "not generated"), when=m_audit)
+    s4 = dict(title="Release decision", state="go" if gate["passed"] else "nogo",
+              detail=f"{'GO' if gate['passed'] else 'NO-GO'} · F1 {gate['measured_f1']:.3f} vs {gate['gate_f1']:.2f}",
+              when=m_metrics)
+    steps = [s1, s2, s3, s4]
+    v = run_view()
+    if v["state"] == "running" and v["status"]:
+        index = {"original": 0, "repaired": 1, "audit": 2}
+        for st_ in v["status"]["steps"]:
+            if st_["state"] == "running":
+                steps[index[st_["key"]]].update(state="run", detail="running now…")
+    return steps
+
+
+def checklist_html(steps: list[dict]) -> str:
+    """The audit stages as a plain checklist: a mark, the step and what was checked."""
+    marks = {"done": "✓", "go": "✓", "warn": "!", "todo": "–", "nogo": "✕", "run": "…"}
+    return "".join(f'<div class="wg-check"><span class="mark {s["state"]}">{marks[s["state"]]}</span>'
+                   f'<span class="t">{s["title"]}</span><span class="d">{esc(s["detail"])}'
+                   f'{" · " + stamp(s["when"]) if s.get("when") else ""}</span></div>' for s in steps)
