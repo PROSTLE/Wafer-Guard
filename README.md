@@ -75,3 +75,7 @@ streamlit run app/release_board.py # 4. open the Release Board
 ```
 You can also open `wafer_guard_fixed.ipynb` in Jupyter / VS Code / Colab and run all cells
 (on Colab, upload `data/secom_telemetry_modified.csv` to a `data/` folder first).
+
+## Configuration
+All settings live in the notebook's **§0 Setup** cell: `HP` (unchanged from the original), `SEED`, `EVAL_SEEDS`,
+`SPLIT_FRACTIONS` (60 / 20 / 20 by time), `CLIP_Z` (±5σ), `LEGACY_CODES`, `GATE_F1`.
