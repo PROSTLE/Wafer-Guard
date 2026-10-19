@@ -778,3 +778,92 @@ def wafers_table(d: pd.DataFrame, highlight_row=None) -> str:
     return table(t, {"Score": sci, "Outcome": outcome_chip,
                      "Actual": lambda v: f'<span class="{"c-def" if v == "Defect" else "c-pass"}">{v}</span>'},
                  highlight=(lambda r: r["Wafer"] == f"#{highlight_row}") if highlight_row is not None else None)
+
+
+# ---------------------------------------------------------------- pages
+def page_overview() -> None:
+    page_header("Overview", esc(RD["subtitle"]))
+    passed = gate["passed"]
+    verdict = '<span class="pass">Meets</span>' if passed else '<span class="fail">Does not meet</span>'
+    stats = [
+        ("Original notebook F1", f"{orig['f1']:.3f}", f"leaky test, {orig['test_prevalence']:.0%} defects"),
+        ("Precision", f"{rep['precision']:.3f}", f"{rep['tp']} of {rep['tp'] + rep['fp']} alarms real"),
+        ("Recall", f"{rep['recall']:.3f}", f"{rep['tp']} of {rep['n_defects']} defects caught"),
+        ("PR-AUC", f"{rep['ap']:.3f}", f"no-skill {no_skill:.3f}"),
+        ("ROC-AUC", f"{rep['roc_auc']:.3f}", "0.5 = chance"),
+        ("Test defect rate", f"{rep['prevalence']:.1%}", f"{rep['n_defects']} of {rep['n']} wafers"),
+    ]
+    cells = "".join(f'<div class="wg-stat"><div class="wg-label">{a}</div><div class="wg-stat-value">{b}</div>'
+                    f'<div class="wg-stat-sub">{c}</div></div>' for a, b, c in stats)
+    st.html(f"""<div class="wg-hero"><div class="wg-hero-main">
+<div class="wg-label">Repaired model · test F1</div>
+<div class="wg-hero-value">{rep["f1"]:.3f}</div>
+<div class="wg-hero-gate">{verdict} the release gate of {gate["gate_f1"]:.2f}</div>
+<div class="wg-hero-note">95% CI {boot["f1_ci95"][0]:.3f}–{boot["f1_ci95"][1]:.3f} · most recent {rep["n"]} wafers,
+threshold frozen on validation</div></div><div class="wg-stats">{cells}</div></div>""")
+
+    left, right = st.columns([1.12, 1], gap="medium")
+    with left, st.container(key="card_perf"):
+        a, b = st.columns([1, 1.2], vertical_alignment="center")
+        with a:
+            card_title("Original vs repaired", "test-set metrics")
+        b.html(f'<div style="display:flex;justify-content:flex-end">'
+               f'{legend([("Original (leaky test)", T["original"]), ("Repaired", T["repaired"])])}</div>')
+        perf_comparison_chart(330)
+        note(f"Original: random split, SMOTE-balanced test ({orig['test_size']} rows, {orig['test_prevalence']:.0%} defects). "
+             f"Repaired: most recent {rep['n']} wafers ({rep['prevalence']:.1%} defects). Dashed line: release gate.")
+    with right, st.container(key="card_fp"):
+        a, b = st.columns([1.25, 1], vertical_alignment="center")
+        with a:
+            card_title("Sensor fingerprints", "test block")
+        mode = b.segmented_control("Pick", ["Latest", "Top score"], default="Latest", key="fp_mode",
+                                   label_visibility="collapsed",
+                                   help="Which passing / defective test wafer to show: the most recent, or the one "
+                                        "the model scores highest") or "Latest"
+        if require_live():
+            te = LIVE["scored"][LIVE["scored"]["split"] == "test"]
+            key = "timestamp" if mode == "Latest" else "score"
+            normal = te[te["defect"] == 0].sort_values(key).iloc[-1]
+            defect = te[te["defect"] == 1].sort_values(key).iloc[-1]
+            c1, c2, c3 = st.columns([1, 0.18, 1], vertical_alignment="center")
+            with c1:
+                fingerprint(normal.name, 225)
+                st.html(wafer_caption(normal, "Passing wafer"))
+            with c2:
+                st.html(z_legend(LIVE["pre"].clip_z, 180))
+            with c3:
+                fingerprint(defect.name, 225)
+                st.html(wafer_caption(defect, "Defective wafer"))
+            note(f"Each cell is one of the {len(LIVE['pre'].mean_)} sensors the model reads, coloured by its z-score "
+                 "against training statistics, in sensor order. SECOM records no on-wafer positions, so this is not "
+                 "a spatial wafer map.")
+
+    a, b, c = st.columns([0.95, 1, 1.3], gap="medium")
+    with a, st.container(key="card_loss"):
+        card_title("Training loss", "original notebook, as logged")
+        if original_loss_chart(220):
+            L = OLOG["loss"]
+            note(f"Reconstruction loss barely moves ({L['recon'].iloc[0]:.3f} → {L['recon'].iloc[-1]:.3f}, the broadcast "
+                 f"bug) while classifier loss falls to {L['clf'].iloc[-1]:.4f}. No validation loss was logged.")
+    with b, st.container(key="card_dist"):
+        card_title("Score distribution", f"test block, {rep['n']} wafers")
+        if require_live():
+            score_hist("test", "count", 220)
+            note("Defect probability from the saved model. Wafers right of the dashed threshold are flagged.")
+    with c, st.container(key="card_recent"):
+        h, v = st.columns([1.6, 1], vertical_alignment="center")
+        with h:
+            card_title("Recent wafers")
+        v.button("View all", icon=":material/arrow_forward:", icon_position="right", type="tertiary", key="view_all",
+                 on_click=go, args=("Wafer Explorer",), kwargs=EXPLORER_FILTERS)
+        if require_live():
+            recent = LIVE["scored"].sort_values("timestamp", ascending=False).head(6)
+            t = pd.DataFrame({"Wafer": recent["row"].map(lambda r: f"#{r}"),
+                              "Time": recent["timestamp"].dt.strftime("%m-%d %H:%M"),
+                              "Score": recent["score"],
+                              "Prediction": recent["flagged"].map({True: "Defective", False: "Normal"}),
+                              "Result": [outcome(a_, b_) for a_, b_ in zip(recent["defect"], recent["flagged"])]})
+            st.html(table(t, {"Score": sci, "Result": outcome_chip,
+                              "Prediction": lambda p: f'<span class="{"c-def" if p == "Defective" else "c-pass"}">{p}</span>'}))
+            note(f"Newest wafers in the data ({recent['timestamp'].dt.year.iloc[0]}). Result: TP/TN correct, "
+                 "FP false alarm, FN missed defect.")
