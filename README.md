@@ -65,3 +65,13 @@ python -m venv .venv
 pip install -r requirements.txt
 python -m ipykernel install --user --name python3
 ```
+
+## Reproduce everything (≈ 10 minutes on a laptop CPU)
+```bash
+python scripts/run_original.py     # 1. reproduce the original claim  -> original/bnypi_executed.ipynb
+python scripts/run_notebook.py     # 2. run the repaired pipeline     -> results/, artifacts/
+python scripts/render_audit.py     # 3. regenerate the audit          -> AUDIT.md
+streamlit run app/release_board.py # 4. open the Release Board
+```
+You can also open `wafer_guard_fixed.ipynb` in Jupyter / VS Code / Colab and run all cells
+(on Colab, upload `data/secom_telemetry_modified.csv` to a `data/` folder first).
