@@ -1126,3 +1126,38 @@ def page_ablation() -> None:
                          alt.Tooltip("precision:Q", format=".3f"), alt.Tooltip("recall:Q", format=".3f"),
                          alt.Tooltip("threshold:Q", format=".2e")])
             chart(dots, 320)
+
+
+def page_walk_forward() -> None:
+    page_header("Walk-Forward Evaluation", "Each fold trains on all wafers up to a point, tunes the threshold on the last "
+                "quarter of that history and tests on the next block, so every prediction uses only the past.")
+    p = wf["pooled"]
+    st.html(tiles([
+        ("pooled F1", f"{p['f1']:.3f}", f"{p['n']} wafers · {p['n_defects']} defects"),
+        ("pooled precision", f"{p['precision']:.3f}", "share of alarms that are real"),
+        ("pooled recall", f"{p['recall']:.3f}", "share of defects caught"),
+        ("mean fold PR-AUC", f"{wf['mean_fold_ap']:.3f}", f"pooled prevalence {p['prevalence']:.1%}"),
+    ]))
+    folds = pd.DataFrame(wf["folds"])
+    folds["fold_label"] = [f"Fold {r.fold} · {r.test_start[5:]}→{r.test_end[5:]}" for r in folds.itertuples()]
+    with st.container(key="card_wf"):
+        card_title("Per-fold metrics", "PR-AUC should beat the no-skill line (= fold defect rate)")
+        m = folds.melt(["fold_label", "prevalence"], ["precision", "recall", "f1", "ap"], var_name="metric")
+        order = folds["fold_label"].tolist()
+        bars = alt.Chart(m).mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+            x=alt.X("fold_label:N", sort=order, title=None, axis=alt.Axis(labelAngle=0)),
+            xOffset=alt.XOffset("metric:N", sort=["precision", "recall", "f1", "ap"]),
+            y=alt.Y("value:Q", title=None, scale=alt.Scale(domain=[0, 1])),
+            color=alt.Color("metric:N", sort=["precision", "recall", "f1", "ap"], legend=alt.Legend(title=None),
+                            scale=alt.Scale(domain=["precision", "recall", "f1", "ap"],
+                                            range=[T["repaired"], T["violet"], T["original"], T["warn"]])),
+            tooltip=["fold_label:N", "metric:N", alt.Tooltip("value:Q", format=".3f")])
+        prev = alt.Chart(folds).mark_tick(color=T["text"], thickness=2, size=70).encode(
+            x=alt.X("fold_label:N", sort=order), y="prevalence:Q",
+            tooltip=["fold_label:N", alt.Tooltip("prevalence:Q", title="defect rate (no-skill PR-AUC)", format=".3f")])
+        chart(bars + prev, 320)
+        note("Horizontal tick = fold defect rate, the PR-AUC a random ranking would get.")
+    with st.container(key="card_wf_table"):
+        card_title("Folds")
+        st.html(table(folds.drop(columns=["fold_label"]),
+                      {"prevalence": ".1%", "threshold": sci, **{k: ".3f" for k in ["precision", "recall", "f1", "ap", "roc_auc"]}}))
