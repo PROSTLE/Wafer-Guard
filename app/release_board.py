@@ -1306,3 +1306,30 @@ to {top["f1_mean"]:.3f}.</li>
             st.markdown(text)
         else:
             st.write("AUDIT.md not found. Run the **Render AUDIT.md** step.")
+
+
+def page_config() -> None:
+    cfg = R["config"]
+    page_header("Configuration", "Settings recorded by the notebook run that produced metrics.json (§0 Setup).")
+    left, right = st.columns(2, gap="medium")
+    with left, st.container(key="card_hp"):
+        card_title("Hyper-parameters", "unchanged from the original notebook")
+        st.html(table(pd.DataFrame({"parameter": list(cfg["HP"]), "value": [str(v) for v in cfg["HP"].values()]})))
+    with right, st.container(key="card_settings"):
+        card_title("Repair settings & environment")
+        rows = [("seed", cfg["seed"]), ("evaluation seeds", ", ".join(map(str, cfg["eval_seeds"]))),
+                ("split fractions", ", ".join(f"{k} {v:.0%}" for k, v in cfg["split_fractions"].items()) +
+                 f", test {1 - sum(cfg['split_fractions'].values()):.0%}"),
+                ("clip z", f"±{cfg['clip_z']:g}σ"), ("PS-L codes", ", ".join(f"{c:g}" for c in cfg["legacy_codes"])),
+                ("release gate F1", f"{gate['gate_f1']:.2f}"), ("decision threshold", sci(rep["threshold"])),
+                ("torch", cfg["torch"]), ("device", cfg["device"]),
+                ("board Python", sys.version.split()[0])]
+        st.html(table(pd.DataFrame(rows, columns=["setting", "value"]).astype(str)))
+    with st.container(key="card_files"):
+        card_title("Files the board reads")
+        paths = [inference.DATA, inference.MODEL_PATH, inference.PREPROCESSOR_PATH, METRICS, ABLATION_RUNS,
+                 ROOT / "results" / "walk_forward.csv", *sorted(FIGS.glob("*.png")), AUDIT, README, ORIGINAL_RUN,
+                 ROOT / "wafer_guard_fixed.ipynb"]
+        rows = [dict(file=str(p.relative_to(ROOT)).replace("\\", "/"), exists="yes" if p.exists() else "missing",
+                     size=f"{p.stat().st_size / 1024:,.1f} KB" if p.exists() else "–", modified=stamp(mtime(p))) for p in paths]
+        st.html(table(pd.DataFrame(rows)))
