@@ -88,3 +88,14 @@ The pipeline checks itself while it runs; it stops with an error if any of these
 - the validation block contains defects before a threshold is tuned (§4.4).
 
 Determinism: seeds are fixed, so re-running the notebook on the same versions reproduces the same numbers on CPU.
+
+## Design decisions & limitations
+- **Minimal-change repair.** Architecture, optimiser, epochs and learning rate are the original's. Only defects were
+  fixed, so differences in score are attributable to the fixes rather than to tuning.
+- **Threshold** is chosen by maximising F1 on the validation block, then frozen. The validation block holds few
+  defects, so the threshold is noisy; that is reported, not hidden.
+- **Clipping at ±5σ** and dropping sensors that are constant in training are production-hardening choices fixed
+  before looking at test results.
+- **Small test set.** Few defects in the test block → wide confidence intervals; walk-forward evaluation and
+  five seeds are reported alongside the single hold-out.
+- **PS-L wafers** have no failures in this data, so the model's behaviour on a failing PS-L wafer is untested.
