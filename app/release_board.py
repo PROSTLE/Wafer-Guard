@@ -1243,3 +1243,66 @@ def page_explorer() -> None:
         st.html(table(t, {"raw": ".4g", "train mean": ".4g", "train std": ".4g", "z (input)": "+.2f"}))
         note("Sensors furthest from training statistics for this wafer (|z| capped at "
              f"{LIVE['pre'].clip_z:g}σ; missing readings enter the model as 0).")
+
+
+def page_audit() -> None:
+    page_header("Audit Findings", "Evidence for each defect, measured by the notebook (§3) and stored in metrics.json.")
+    ev_l, ev_b, ev_c = R["evidence_leakage"], R["evidence_loss_bug"], R["evidence_legacy_blindness"]
+    top = max(R["ablation"][1:-1], key=lambda a: a["f1_mean"])  # single defects only (§7 row order)
+    a, b, c = st.columns(3, gap="medium")
+    with a, st.container(key="card_ev1"):
+        card_title("1 · Data leakage <span class='wg-sev'>cell 8</span>")
+        st.html(f'''<ul class="wg-evidence">
+<li>Test set after SMOTE: <b>{ev_l["test_prevalence_after_smote"]:.0%} defects</b></li>
+<li>Synthetic share of test defects: <b>{ev_l["test_defects_share_synthetic"]:.0%}</b></li>
+<li>Nearest-training-row distance: real defects <b>{ev_l["nn_distance_median"]["real_defect"]:.2f}</b> vs real passes
+<b>{ev_l["nn_distance_median"]["real_pass"]:.2f}</b></li>
+<li>Real test defects with their own SMOTE “child” in training: <b>{ev_l["real_test_defects_with_own_smote_child_in_train"]:.0%}</b>
+(max gap {ev_l["max_segment_gap"]:.1e})</li>
+<li>Real test wafers with future wafers in training: <b>{ev_l["real_test_wafers_with_future_training_rows"]:.0%}</b>
+(median {ev_l["median_future_training_rows_per_test_wafer"]:.0f} each)</li>
+<li>Scaler fitted on <b>{ev_l["scaler_fit_rows"]}</b> rows, test rows included</li></ul>''')
+    with b, st.container(key="card_ev2"):
+        card_title("2 · Broadcast loss <span class='wg-sev'>cells 10–14</span>")
+        st.html(f'''<ul class="wg-evidence">
+<li><code>{ev_b["recon_shape"]}</code> − <code>{ev_b["input_shape"]}</code> → <b><code>{ev_b["broadcast_shape"]}</code></b></li>
+<li>Buggy loss of a flawless reconstruction: <b>{ev_b["buggy_loss_perfect_reconstruction"]:.3f}</b></li>
+<li>Buggy loss of a constant “average wafer”: <b>{ev_b["buggy_loss_batch_mean_output"]:.3f}</b>, which training prefers</li>
+<li>Correct loss: flawless <b>{ev_b["correct_loss_perfect_reconstruction"]:.3f}</b>, average wafer
+<b>{ev_b["correct_loss_batch_mean_output"]:.3f}</b></li>
+<li>Original reconstructions' spread vs inputs: <b>{ev_b["original_model_recon_spread_ratio"]:.3f}×</b>
+(repaired {rep["recon_spread_ratio"]:.3f}×)</li></ul>''')
+    with c, st.container(key="card_ev3"):
+        card_title("3 · PS-L blindness <span class='wg-sev'>cell 8</span>")
+        codes = ", ".join(f"{k}: {v:.2f}σ" for k, v in ev_c["z_of_codes_in_original"].items())
+        st.html(f'''<ul class="wg-evidence">
+<li><code>sensor_1</code> fill value: <b>{ev_c["imputer_mean_sensor_1_original"]:.1f}</b>
+(real mean {ev_c["true_mean_sensor_1_normal_wafers"]:.1f})</li>
+<li><code>sensor_0</code> σ inflated to <b>{ev_c["sensor_0_scaler_std_original"]:.1f}</b> (real {ev_c["sensor_0_std_real_readings"]:.1f})</li>
+<li>Real readings squashed to <b>{ev_c["sensor_1_real_spread_in_original_z"]:.3f}σ</b> spread (<code>sensor_1</code>)</li>
+<li>Sentinel 0.0 on <code>sensor_0</code> → <b>{ev_c["z_of_sentinel_sensor_0_in_original"]:.2f}σ</b></li>
+<li>Codes → {codes}</li></ul>''')
+
+    left, right = st.columns([1, 1], gap="medium")
+    with left, st.container(key="card_lossfig"):
+        card_title("The broadcast loss rewards the wrong answer")
+        figure("03_loss_bug", "The broadcast loss prefers a constant output over a flawless reconstruction.")
+    with right, st.container(key="card_risks"):
+        card_title("Residual risks")
+        li, leg, d = R["legacy_in_test"], R["legacy"], R["data"]
+        st.html(f'''<ol class="wg-evidence">
+<li><b>Small numbers:</b> the test block holds {rep["n_defects"]} defects; F1 95% CI is
+{boot["f1_ci95"][0]:.3f}–{boot["f1_ci95"][1]:.3f}.</li>
+<li><b>PS-L shortcut:</b> {leg["fails_in_legacy"]} of {leg["n_legacy"]} PS-L wafers failed in this data; in test the model
+flagged {li["legacy_flagged"]} of {li["legacy_wafers"]}. Catching a real PS-L excursion is untested.</li>
+<li><b>Drift:</b> monthly defect rate: {", ".join(f"{k}: {v:.1%}" for k, v in d["monthly_defect_rate"].items())}.</li>
+<li><b>Model value:</b> logistic regression PR-AUC {R["baseline_logreg"]["ap"]:.3f} vs autoencoder {rep["ap"]:.3f}.</li>
+<li><b>Attribution:</b> re-introducing only “{esc(top["config"])}” lifts F1 from {R["ablation"][0]["f1_mean"]:.3f}
+to {top["f1_mean"]:.3f}.</li>
+</ol>''')
+    text = audit_text(mtime(AUDIT))
+    with st.expander(f"Full AUDIT.md (generated {stamp(mtime(AUDIT))})", expanded=False):
+        if text:
+            st.markdown(text)
+        else:
+            st.write("AUDIT.md not found. Run the **Render AUDIT.md** step.")
