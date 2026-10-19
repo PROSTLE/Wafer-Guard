@@ -28,3 +28,28 @@ Numbers, evidence and fixes: see [`AUDIT.md`](AUDIT.md).
 `scripts/render_audit.py`, and the Release Board only reads it; it also re-scores every wafer live with the saved
 model in `artifacts/` and checks the result against `metrics.json`. Nothing is hard-coded anywhere.
 The evaluator-only file in the task's Drive folder (`secom_legacy_mask_EVALUATOR_ONLY.csv`) was **not** downloaded or used.
+
+## Project layout
+```
+WaferGuard/
+├── wafer_guard_fixed.ipynb      # the repaired pipeline (read this first)
+├── AUDIT.md                     # generated audit report
+├── data/secom_telemetry_modified.csv
+├── original/
+│   ├── bnypi.ipynb              # notebook as supplied
+│   └── bnypi_executed.ipynb     # the same notebook, executed by us (evidence of the 0.99 claim)
+├── results/
+│   ├── metrics.json             # every number, produced by the notebook
+│   ├── ablation_runs.csv        # bug-attribution runs (8 configurations × 5 seeds)
+│   ├── walk_forward.csv
+│   └── figures/*.png
+├── artifacts/                   # repaired model weights + fitted preprocessor
+├── app/
+│   ├── release_board.py         # Streamlit dashboard
+│   └── inference.py             # loads artifacts/ and re-scores wafers for the dashboard
+└── scripts/
+    ├── run_original.py          # executes the original notebook unchanged
+    ├── run_notebook.py          # executes wafer_guard_fixed.ipynb top-to-bottom
+    ├── render_audit.py          # metrics.json -> AUDIT.md
+    └── run_pipeline.py          # runs the three steps above in order (the board's "Run Pipeline" button)
+```
