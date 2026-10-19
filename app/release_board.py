@@ -543,3 +543,127 @@ def sidebar() -> None:
         with st.container(key="side_bottom"):
             st.button(ABOUT[0], icon=ABOUT[1], key="nav_about", width="stretch", on_click=go, args=(ABOUT[0],),
                       type="primary" if ss.page == ABOUT[0] else "tertiary")
+
+
+# ---------------------------------------------------------------- top bar
+def run_status_text() -> str:
+    """Only says something when there is something to act on: a run in progress, a failed run, a broken check."""
+    v = run_view()
+    if v["state"] == "running":
+        return f'<div class="wg-run">Running step {v["idx"]} of {v["n"]}: {esc(v["label"])}…</div>'
+    if v["state"] == "failed" and v["status"] and v["status"].get("finished"):
+        failed = next((s for s in v["status"]["steps"] if s["state"] == "failed"), None)
+        return f'<div class="wg-run bad">Last run failed{" at " + esc(failed["label"]) if failed else ""}. See Reproduce</div>'
+    if not LIVE_OK:
+        return '<div class="wg-run bad">Saved model could not be loaded</div>'
+    if not LIVE["verify"]["ok"]:
+        return '<div class="wg-run bad">Live re-score differs from metrics.json. See Reproduce</div>'
+    return ""
+
+
+def topbar() -> None:
+    with st.container(key="topbar"):
+        c_q, c_status, c_theme, c_run = st.columns([4.2, 3.6, 0.4, 1.3], vertical_alignment="center")
+        c_q.text_input("Search", key="q", placeholder="Search wafers, sensors, experiments…",
+                       label_visibility="collapsed", icon=":material/search:")
+        running = active_run()
+
+        @st.fragment(run_every=2 if running else None)
+        def live_status():
+            proc = runs().get("proc")
+            if proc is not None and proc.poll() is not None and ss.get("run_seen") != proc.pid:
+                ss.run_seen = proc.pid  # this session has not yet reloaded after the run ended
+                st.rerun(scope="app")
+            text = run_status_text()
+            if text:
+                st.html(text)
+
+        with c_status:
+            live_status()
+        dark = ss.theme == "dark"
+        c_theme.button("", icon=":material/light_mode:" if dark else ":material/dark_mode:", key="theme_toggle",
+                       help="Light mode" if dark else "Dark mode", type="tertiary", on_click=go, args=(ss.page,),
+                       kwargs=dict(theme="light" if dark else "dark"))
+        if c_run.button("Running…" if running else "Run pipeline", type="primary", width="stretch",
+                        disabled=running, key="run_top"):
+            run_dialog()
+        if ss.get("q", "").strip():
+            search_results(ss.q)
+
+
+def search_results(q: str) -> None:
+    hits = search(q)
+    with st.container(key="card_search"):
+        h, x = st.columns([6, 1], vertical_alignment="center")
+        with h:
+            card_title(f"Search results for “{esc(q.strip())}”", f"{len(hits)} match{'es' if len(hits) != 1 else ''}")
+        x.button("Clear", icon=":material/close:", type="tertiary", key="q_clear", on_click=lambda: ss.update(q=""))
+        if not hits:
+            ex = ""
+            if LIVE_OK:
+                last = LIVE["scored"].iloc[-1]
+                ex = (f" (e.g. <b>{last['row']}</b>), a sensor (<b>{esc(LIVE['feature_names'][0])}</b>), "
+                      f"a date (<b>{last['timestamp']:%Y-%m-%d}</b>)")
+            note(f"Nothing matched. Try a wafer number{ex}, an experiment name, "
+                 f"<b>fold {wf['folds'][-1]['fold']}</b>, a setting or a page name.")
+        for i, (kind, title, detail, page, state) in enumerate(hits[:12]):
+            a, b = st.columns([6, 1], vertical_alignment="center")
+            a.html(f'<div class="wg-hit"><span class="wg-hit-kind">{esc(kind)}</span>'
+                   f'<span class="wg-hit-title">{esc(title)}</span><span class="wg-hit-detail">{esc(detail)}</span></div>')
+            b.button("Open", key=f"hit_{i}", type="tertiary", icon=":material/arrow_forward:", icon_position="right",
+                     on_click=go, args=(page,), kwargs={**state, "q": ""})
+
+
+EXPLORER_FILTERS = dict(ex_split=None, ex_actual=None, ex_decision=None, ex_psl=None, ex_sort=None, ex_page=None)
+
+
+def search(q: str) -> list[tuple]:
+    """Search pages, wafers (by CSV row or date), sensors, experiments, walk-forward folds, audit sections, settings."""
+    ql = q.strip().lower()
+    hits = []
+    for name, _ in PAGES + [ABOUT]:
+        if ql in name.lower():
+            hits.append(("Page", name, "open page", name, {}))
+    if LIVE_OK:
+        sc, sensors = LIVE["scored"], [c for c in LIVE["raw"].columns if c.startswith("sensor_")]
+        rows = set(sc["row"])
+        m = re.fullmatch(r"(?:wafer\s*#?|#)?\s*(\d+)", ql)
+        if m and int(m.group(1)) in rows:
+            w = sc[sc["row"] == int(m.group(1))].iloc[0]
+            hits.append(("Wafer", f"#{w['row']}", f"{w['timestamp']:%Y-%m-%d %H:%M} · {w['split']} · "
+                         f"{'defect' if w['defect'] else 'pass'} · score {sci(w['score'])}",
+                         "Wafer Explorer", dict(EXPLORER_FILTERS, ex_pick=int(w["row"]), ex_jump=True)))
+        ms = re.fullmatch(r"(?:sensor[\s_]*|s)?(\d+)", ql)
+        if ms and f"sensor_{int(ms.group(1))}" in sensors:
+            name = f"sensor_{int(ms.group(1))}"
+            kept = name in LIVE["feature_names"]
+            hits.append(("Sensor", name, "used by the model" if kept else "dropped (constant in training)",
+                         "Data Analysis", dict(sensor_pick=name)))
+        if re.fullmatch(r"\d{4}-\d{2}(-\d{2})?( \d{2}(:\d{2})?)?", ql):
+            match = sc[sc["timestamp"].dt.strftime("%Y-%m-%d %H:%M").str.startswith(ql)]
+            for _, w in match.head(6).iterrows():
+                hits.append(("Wafer", f"#{w['row']}", f"{w['timestamp']:%Y-%m-%d %H:%M} · {w['split']} · "
+                             f"{'defect' if w['defect'] else 'pass'}", "Wafer Explorer",
+                             dict(EXPLORER_FILTERS, ex_pick=int(w["row"]), ex_jump=True)))
+            if len(match) > 6:
+                hits.append(("Wafers", f"{len(match)} wafers on {q.strip()}", "showing the first 6", "Wafer Explorer", {}))
+    for a in R["ablation"]:
+        if ql in a["config"].lower():
+            hits.append(("Experiment", a["config"], f"F1 {a['f1_mean']:.3f} ± {a['f1_std']:.3f} ({len(R['config']['eval_seeds'])} seeds)",
+                         "Ablation Study", {}))
+    for s in R["summary_table"]:
+        if ql in s["model"].lower() or ql in s["test"].lower():
+            hits.append(("Evaluation", s["model"], f"{s['test']} · F1 " + ("–" if s["f1"] is None else f"{s['f1']:.3f}"),
+                         "Model Performance", {}))
+    for f in wf["folds"]:
+        if ql == "fold" or ql in (f"fold {f['fold']}", f"fold{f['fold']}"):
+            hits.append(("Fold", f"Walk-forward fold {f['fold']}", f"{f['test_start']} → {f['test_end']} · F1 {f['f1']:.3f}",
+                         "Walk-Forward Eval", {}))
+    for line in audit_text(mtime(AUDIT)).splitlines():
+        if line.startswith("#") and ql in line.lower() and len(ql) >= 3:
+            hits.append(("Audit", line.lstrip("# ").strip(), "section of AUDIT.md", "Audit Findings", {}))
+    flat = {**R["config"]["HP"], **{k: v for k, v in R["config"].items() if k != "HP"}}
+    for k, v in flat.items():
+        if len(ql) >= 3 and ql in k.lower():
+            hits.append(("Setting", k, str(v), "Configuration", {}))
+    return hits
