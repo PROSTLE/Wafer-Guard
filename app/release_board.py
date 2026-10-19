@@ -1388,3 +1388,13 @@ def page_reproduce() -> None:
 def page_about() -> None:
     with st.container(key="card_about"):
         st.markdown(RD["text"] or "README.md not found.")
+
+
+# ---------------------------------------------------------------- render
+sidebar()
+topbar()
+{
+    "Overview": page_overview, "Model Performance": page_performance, "Data Analysis": page_data,
+    "Ablation Study": page_ablation, "Walk-Forward Eval": page_walk_forward, "Wafer Explorer": page_explorer,
+    "Audit Findings": page_audit, "Configuration": page_config, "Reproduce": page_reproduce, "About": page_about,
+}.get(ss.page, page_overview)()
