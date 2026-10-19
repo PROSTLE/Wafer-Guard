@@ -667,3 +667,114 @@ def search(q: str) -> list[tuple]:
         if len(ql) >= 3 and ql in k.lower():
             hits.append(("Setting", k, str(v), "Configuration", {}))
     return hits
+
+
+# ---------------------------------------------------------------- shared charts
+def perf_comparison_chart(height: int = 270) -> None:
+    metrics = [("f1", "F1"), ("precision", "Precision"), ("recall", "Recall"), ("roc_auc", "ROC-AUC"), ("ap", "PR-AUC")]
+    models = ["Original (leaky test)", "Repaired"]
+    d = pd.DataFrame([dict(metric=label, model=m, value=src[k]) for k, label in metrics
+                      for m, src in zip(models, [orig, rep])])
+    x = alt.X("metric:N", sort=[l for _, l in metrics], title=None, axis=alt.Axis(labelAngle=0, labelFontSize=12))
+    base = alt.Chart(d).encode(x=x, xOffset=alt.XOffset("model:N", sort=models))
+    bars = base.mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2, size=30).encode(
+        y=alt.Y("value:Q", scale=alt.Scale(domain=[0, 1.08]), title=None, axis=alt.Axis(values=[0, .2, .4, .6, .8, 1])),
+        color=alt.Color("model:N", scale=alt.Scale(domain=models, range=[T["original"], T["repaired"]]), legend=None),
+        tooltip=["model:N", "metric:N", alt.Tooltip("value:Q", format=".3f")])
+    labels = base.mark_text(dy=-7, fontSize=11, color=T["text2"]).encode(y="value:Q", text=alt.Text("value:Q", format=".2f"))
+    gate_rule = alt.Chart(pd.DataFrame({"y": [gate["gate_f1"]]})).mark_rule(strokeDash=[4, 4], color=T["muted"]).encode(
+        y="y:Q", tooltip=[alt.Tooltip("y:Q", title="release gate (F1)")])
+    chart(bars + labels + gate_rule, height)
+
+
+def original_loss_chart(height: int = 230) -> bool:
+    if not OLOG or OLOG["loss"].empty:
+        note("original/bnypi_executed.ipynb has no training log. Run <b>Reproduce original notebook</b>.")
+        return False
+    d = OLOG["loss"].melt("epoch", ["recon", "clf"], var_name="loss", value_name="value")
+    names = {"recon": "reconstruction", "clf": "classifier"}
+    d["loss"] = d["loss"].map(names)
+    c = alt.Chart(d).mark_line(point=alt.OverlayMarkDef(size=18), strokeWidth=1.6).encode(
+        x=alt.X("epoch:Q", title="epoch"), y=alt.Y("value:Q", title="training loss"),
+        color=alt.Color("loss:N", scale=alt.Scale(domain=list(names.values()), range=[T["accent"], T["logreg"]]),
+                        legend=alt.Legend(title=None)),
+        tooltip=["loss:N", "epoch:Q", alt.Tooltip("value:Q", format=".4f")])
+    chart(c, height)
+    return True
+
+
+def score_hist(split: str, measure: str, height: int = 230) -> None:
+    sc = LIVE["scored"]
+    d = sc if split == "all" else sc[sc["split"] == split]
+    s = d["score"].to_numpy()
+    s = np.maximum(s, s[s > 0].min() if (s > 0).any() else 1e-12)  # float32 sigmoid can underflow to 0; log axis can't
+    edges = np.logspace(math.floor(np.log10(s.min())), math.ceil(np.log10(s.max())), 41)
+    rows = []
+    for cls, name in [(0, "Pass"), (1, "Defect")]:
+        counts, _ = np.histogram(s[d["defect"].to_numpy() == cls], edges)
+        total = max(counts.sum(), 1)
+        rows += [dict(x0=a, x1=b, count=int(c), share=c / total, cls=name) for a, b, c in zip(edges[:-1], edges[1:], counts)]
+    h = pd.DataFrame(rows)
+    h = h[h["count"] > 0]
+    ytitle = "wafers" if measure == "count" else "share of class"
+    bars = alt.Chart(h).mark_bar(opacity=0.7, binSpacing=0).encode(
+        x=alt.X("x0:Q", scale=alt.Scale(type="log"), axis=alt.Axis(format=".0e", title="model score (log scale)")),
+        x2="x1:Q", y=alt.Y(f"{measure}:Q", stack=None, title=ytitle, axis=alt.Axis(format="d" if measure == "count" else ".0%")),
+        y2=alt.datum(0),
+        color=alt.Color("cls:N", scale=alt.Scale(domain=["Pass", "Defect"], range=[T["normal"], T["defect"]]),
+                        legend=alt.Legend(title=None)),
+        tooltip=[alt.Tooltip("cls:N", title="actual"), alt.Tooltip("x0:Q", title="from", format=".2e"),
+                 alt.Tooltip("x1:Q", title="to", format=".2e"), "count:Q", alt.Tooltip("share:Q", format=".1%")])
+    thr = alt.Chart(pd.DataFrame({"t": [rep["threshold"]]}))
+    rule = thr.mark_rule(strokeDash=[5, 4], color=T["text2"]).encode(x="t:Q", tooltip=[alt.Tooltip("t:Q", title="threshold", format=".2e")])
+    label = thr.mark_text(align="left", dx=4, dy=-4, baseline="top", color=T["text2"], fontSize=10).encode(
+        x="t:Q", y=alt.value(0), text=alt.value(f"threshold {rep['threshold']:.1e}"))
+    chart(bars + rule + label, height)
+
+
+def fingerprint(i: int, height: int = 230) -> None:
+    """One wafer's model inputs: each continuous sensor's z-score, laid out in sensor order."""
+    pre, names = LIVE["pre"], LIVE["feature_names"]
+    n = len(pre.mean_)
+    z = LIVE["X"][i, :n]
+    cols = math.ceil(math.sqrt(n))
+    raw = LIVE["raw"].iloc[i]
+    d = pd.DataFrame(dict(sensor=names[:n], z=z, raw=[raw[s] for s in names[:n]], k=np.arange(n)))
+    d["col"], d["row"] = d["k"] % cols, d["k"] // cols
+    c = alt.Chart(d).mark_rect(cornerRadius=2).encode(
+        x=alt.X("col:O", axis=None), y=alt.Y("row:O", axis=None),
+        color=alt.Color("z:Q", scale=alt.Scale(domain=[-pre.clip_z, 0, pre.clip_z],
+                                               range=[T["z_low"], T["z_mid"], T["z_high"]]), legend=None),
+        tooltip=["sensor:N", alt.Tooltip("z:Q", title="z-score (model input)", format=".2f"),
+                 alt.Tooltip("raw:Q", title="raw reading", format=".4g")])
+    chart(c, height)
+
+
+def z_legend(clip: float, height: int = 210) -> str:
+    return (f'<div class="wg-zlabels">+{clip:g}σ</div><div class="wg-zbar" style="height:{height}px;'
+            f'background:linear-gradient(to bottom,{T["z_high"]},{T["z_mid"]},{T["z_low"]})"></div>'
+            f'<div class="wg-zlabels">−{clip:g}σ</div>')
+
+
+def wafer_caption(w: pd.Series, kind: str) -> str:
+    decision = "flagged" if w["flagged"] else "not flagged"
+    return (f'<div style="text-align:center;font-size:.84rem;color:var(--text)">{kind} '
+            f'<span class="wg-mono">#{w["row"]}</span>'
+            f'<div class="wg-note">{w["timestamp"]:%Y-%m-%d %H:%M} · score <span class="wg-mono">{sci(w["score"])}</span><br>'
+            f'{decision} · {outcome_chip(outcome(w["defect"], w["flagged"]))}</div></div>')
+
+
+def wafers_table(d: pd.DataFrame, highlight_row=None) -> str:
+    t = pd.DataFrame({
+        "Wafer": d["row"].map(lambda r: f"#{r}"),
+        "Timestamp": d["timestamp"].dt.strftime("%Y-%m-%d %H:%M"),
+        "Split": d["split"],
+        "PS-L": d["legacy"].map({True: "yes", False: ""}),
+        "Score": d["score"],
+        "Decision": d["flagged"].map({True: "flag", False: "pass"}),
+        "Actual": d["defect"].map({1: "Defect", 0: "Pass"}),
+        "Outcome": [outcome(a, b) for a, b in zip(d["defect"], d["flagged"])],
+    })
+    return table(t, {"Score": sci, "Outcome": outcome_chip,
+                     "Actual": lambda v: f'<span class="{"c-def" if v == "Defect" else "c-pass"}">{v}</span>'},
+                 highlight=(lambda r: r["Wafer"] == f"#{highlight_row}") if highlight_row is not None else None)
