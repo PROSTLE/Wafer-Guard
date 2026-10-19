@@ -867,3 +867,93 @@ threshold frozen on validation</div></div><div class="wg-stats">{cells}</div></d
                               "Prediction": lambda p: f'<span class="{"c-def" if p == "Defective" else "c-pass"}">{p}</span>'}))
             note(f"Newest wafers in the data ({recent['timestamp'].dt.year.iloc[0]}). Result: TP/TN correct, "
                  "FP false alarm, FN missed defect.")
+
+
+def page_performance() -> None:
+    page_header("Model Performance", f"Repaired model on the most recent {rep['n']} wafers, threshold chosen on the "
+                f"validation block and frozen. No-skill PR-AUC = defect rate = {no_skill:.3f}.")
+    st.html(tiles([
+            ("F1", f"{rep['f1']:.3f}", f"95% CI {boot['f1_ci95'][0]:.3f}–{boot['f1_ci95'][1]:.3f}"),
+            ("Precision", f"{rep['precision']:.3f}", f"{rep['tp']} / {rep['tp'] + rep['fp']} alarms real"),
+            ("Recall", f"{rep['recall']:.3f}", f"{rep['tp']} / {rep['n_defects']} defects caught"),
+            ("MCC", f"{rep['mcc']:.3f}", "Matthews correlation"),
+            ("PR-AUC", f"{rep['ap']:.3f}", f"CI {boot['ap_ci95'][0]:.3f}–{boot['ap_ci95'][1]:.3f} · no-skill {no_skill:.3f}"),
+            ("ROC-AUC", f"{rep['roc_auc']:.3f}", "0.5 = chance"),
+        ]))
+
+    left, right = st.columns([1.5, 1], gap="medium")
+    with left, st.container(key="card_pr"):
+        card_title("Precision–recall on the test block")
+        curves = [pd.DataFrame({"recall": R["pr_curves"][k]["recall"], "precision": R["pr_curves"][k]["precision"],
+                                "model": label})
+                  for k, label in [("repaired", "repaired autoencoder"), ("logreg", "logistic regression")]]
+        lines = alt.Chart(pd.concat(curves)).mark_line(interpolate="step-after", strokeWidth=2).encode(
+            x=alt.X("recall:Q", scale=alt.Scale(domain=[0, 1]), title="recall (share of defects caught)"),
+            y=alt.Y("precision:Q", scale=alt.Scale(domain=[0, 1]), title="precision (share of alarms that are real)"),
+            color=alt.Color("model:N", scale=alt.Scale(domain=["repaired autoencoder", "logistic regression"],
+                                                       range=[T["repaired"], T["logreg"]]), legend=alt.Legend(title=None)),
+            tooltip=["model:N", alt.Tooltip("recall:Q", format=".3f"), alt.Tooltip("precision:Q", format=".3f")])
+        base = alt.Chart(pd.DataFrame({"y": [no_skill]})).mark_rule(color=T["muted"], strokeDash=[5, 4]).encode(
+            y="y:Q", tooltip=[alt.Tooltip("y:Q", title="no-skill precision", format=".3f")])
+        chart(lines + base, 320)
+        note(f"Dashed line: no-skill precision = test defect rate ({no_skill:.3f}). Logistic regression "
+             f"(C = {R['baseline_logreg']['C']}) PR-AUC {R['baseline_logreg']['ap']:.3f} vs autoencoder {rep['ap']:.3f}.")
+    with right, st.container(key="card_cm"):
+        card_title("Confusion matrix", "test block")
+        st.html(f'''<div class="wg-cm">
+<div class="h"></div><div class="h">predicted pass</div><div class="h">predicted defect</div>
+<div class="h" style="text-align:right">actual pass</div>
+<div class="v">{rep["tn"]}<small>TN</small></div>
+<div class="v err">{rep["fp"]}<small>FP · false alarms</small></div>
+<div class="h" style="text-align:right">actual defect</div>
+<div class="v err">{rep["fn"]}<small>FN · missed</small></div>
+<div class="v">{rep["tp"]}<small>TP · caught</small></div></div>''')
+        note(f"Threshold <b>{rep['threshold']:.2e}</b> was chosen on the validation block, then frozen. "
+             f"Across {len(seeds['runs'])} seeds: F1 {seeds['mean']['f1']:.3f} ± {seeds['std']['f1']:.3f}, "
+             f"PR-AUC {seeds['mean']['ap']:.3f} ± {seeds['std']['ap']:.3f}.")
+        if LIVE_OK:
+            v = LIVE["verify"]
+            note(f"Re-scoring the saved model now gives TN {v['checks']['tn'][0]}, "
+                 f"FP {v['checks']['fp'][0]}, FN {v['checks']['fn'][0]}, TP {v['checks']['tp'][0]}, "
+                 f"{'identical to' if v['ok'] else 'different from'} metrics.json.")
+
+    left, right = st.columns([1.3, 1], gap="medium")
+    with left, st.container(key="card_hist"):
+        card_title("Score distribution", "live model scores by actual class")
+        b, c = st.columns([1.6, 1], vertical_alignment="center")
+        split = b.segmented_control("Block", ["test", "val", "train", "all"], default="test", key="hist_split",
+                                    label_visibility="collapsed") or "test"
+        measure = c.segmented_control("Measure", ["count", "share"], default="count", key="hist_measure",
+                                      label_visibility="collapsed") or "count"
+        if require_live():
+            score_hist(split, measure, 270)
+            sel = LIVE["scored"] if split == "all" else LIVE["scored"][LIVE["scored"]["split"] == split]
+            note("Train-block scores are in-sample (the model was fitted on those wafers, after SMOTE). "
+                 f"“share” normalises each class so the {int(sel['defect'].sum())} defects are visible next to the "
+                 f"{int((sel['defect'] == 0).sum())} passes.")
+    with right, st.container(key="card_seeds"):
+        card_title("Seed-to-seed variation", f"{len(seeds['runs'])} training seeds")
+        sd = pd.DataFrame(seeds["runs"])
+        st.html(table(sd, {"threshold": sci, **{k: ".3f" for k in ["precision", "recall", "f1", "ap", "roc_auc"]}},
+                      highlight=lambda r: r["seed"] == R["config"]["seed"]))
+        note(f"Highlighted: seed {R['config']['seed']}, the saved model. Mean ± std: " +
+             ", ".join(f"{k} {seeds['mean'][k]:.3f} ± {seeds['std'][k]:.3f}" for k in ["precision", "recall", "f1", "ap"]))
+
+    with st.container(key="card_summary"):
+        card_title("All evaluations side by side")
+        sm = pd.DataFrame(R["summary_table"])
+        st.html(table(sm, {k: ".4f" for k in ["prevalence", "f1", "precision", "recall", "ap"]}))
+    with st.container(key="card_training"):
+        tr = R["repaired_training"]
+        card_title("Training diagnostics", "repaired model, seed " + str(rep["seed"]))
+        st.html(tiles([
+            ("final recon loss", f"{tr['final_train_recon_loss']:.4f}", "per-element MSE, training"),
+            ("final classifier loss", f"{tr['final_train_clf_loss']:.2e}", "BCE on SMOTE-balanced training"),
+            ("test score median", sci(tr["test_score_median"]), f"max {tr['test_score_max']:.3f}"),
+            ("val score median", sci(tr["val_score_median"]), f"max {tr['val_score_max']:.3f}"),
+            ("test wafers ≥ 0.5", str(tr["test_wafers_scored_at_least_0_5"]),
+             f"of which defects: {tr['test_defects_scored_at_least_0_5']}"),
+            ("recon spread ratio", f"{rep['recon_spread_ratio']:.3f}", f"original model: {R['evidence_loss_bug']['original_model_recon_spread_ratio']:.3f}"),
+        ]))
+        note("A near-zero classifier loss means the model memorises the balanced training set; on new wafers most scores "
+             "collapse toward 0, which is why the F1-best threshold sits far below 0.5.")
