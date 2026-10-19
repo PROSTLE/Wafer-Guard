@@ -1383,3 +1383,8 @@ def page_reproduce() -> None:
                 note(f"Original notebook log: F1 {OLOG['reported']['f1']:.4f}, precision {OLOG['reported']['precision']:.4f}, "
                      f"recall {OLOG['reported']['recall']:.4f}; metrics.json §2 reproduction: F1 {orig['f1']:.4f}, "
                      f"precision {orig['precision']:.4f}, recall {orig['recall']:.4f}.")
+
+
+def page_about() -> None:
+    with st.container(key="card_about"):
+        st.markdown(RD["text"] or "README.md not found.")
