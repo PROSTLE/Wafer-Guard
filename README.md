@@ -79,3 +79,12 @@ You can also open `wafer_guard_fixed.ipynb` in Jupyter / VS Code / Colab and run
 ## Configuration
 All settings live in the notebook's **§0 Setup** cell: `HP` (unchanged from the original), `SEED`, `EVAL_SEEDS`,
 `SPLIT_FRACTIONS` (60 / 20 / 20 by time), `CLIP_Z` (±5σ), `LEGACY_CODES`, `GATE_F1`.
+
+## Testing
+The pipeline checks itself while it runs; it stops with an error if any of these fail:
+- every PS-L error code appears only on PS-L wafers, and every PS-L wafer carries one (§1.1);
+- train < validation < test in time, with no shared timestamp across a boundary (§4.1);
+- reconstruction and input shapes match, and logits match labels, on every batch (§4.3);
+- the validation block contains defects before a threshold is tuned (§4.4).
+
+Determinism: seeds are fixed, so re-running the notebook on the same versions reproduces the same numbers on CPU.
