@@ -531,3 +531,15 @@ def checklist_html(steps: list[dict]) -> str:
     return "".join(f'<div class="wg-check"><span class="mark {s["state"]}">{marks[s["state"]]}</span>'
                    f'<span class="t">{s["title"]}</span><span class="d">{esc(s["detail"])}'
                    f'{" · " + stamp(s["when"]) if s.get("when") else ""}</span></div>' for s in steps)
+
+
+# ---------------------------------------------------------------- sidebar
+def sidebar() -> None:
+    with st.sidebar:
+        st.html(f'<div class="wg-brand">{icon("stacks")}<span class="wg-brand-name">{esc(RD["name"] or "Wafer Guard")}</span></div>')
+        for name, glyph in PAGES:
+            st.button(name, icon=glyph, key=f"nav_{name}", width="stretch", on_click=go, args=(name,),
+                      type="primary" if ss.page == name else "tertiary")
+        with st.container(key="side_bottom"):
+            st.button(ABOUT[0], icon=ABOUT[1], key="nav_about", width="stretch", on_click=go, args=(ABOUT[0],),
+                      type="primary" if ss.page == ABOUT[0] else "tertiary")
