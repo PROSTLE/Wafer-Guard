@@ -1333,3 +1333,53 @@ def page_config() -> None:
         rows = [dict(file=str(p.relative_to(ROOT)).replace("\\", "/"), exists="yes" if p.exists() else "missing",
                      size=f"{p.stat().st_size / 1024:,.1f} KB" if p.exists() else "–", modified=stamp(mtime(p))) for p in paths]
         st.html(table(pd.DataFrame(rows)))
+
+
+def page_reproduce() -> None:
+    page_header("Reproduce", "Every number on this board can be regenerated from the raw CSV with the project's scripts.")
+    steps = pipeline_steps()
+    with st.container(key="card_steps"):
+        card_title("Audit pipeline status", "checked against the files on disk")
+        st.html(checklist_html(steps))
+    left, right = st.columns([1, 1.3], gap="medium")
+    with left, st.container(key="card_run"):
+        card_title("Run the pipeline", "background process")
+        running = active_run()
+        keys = [k for k, (label, script) in run_pipeline.STEPS.items()
+                if st.checkbox(f"**{label}** · `scripts/{script}`", value=True, key=f"rp_{k}", disabled=running)]
+        if st.button("Running…" if running else "Start run", type="primary", icon=":material/play_arrow:",
+                     disabled=running or not keys, key="rp_start"):
+            start_run(keys)
+            st.rerun()
+        note("Outputs are overwritten. The board reloads itself when the run ends. "
+             "Equivalent commands (README):")
+        st.html(f'<pre class="wg-log" style="white-space:pre;overflow-x:auto">{esc(RD["commands"] or "see README.md")}</pre>')
+    with right, st.container(key="card_log"):
+        @st.fragment(run_every=2 if active_run() else None)
+        def run_log():
+            v = run_view()
+            s = v["status"]
+            card_title("Latest run", {"running": "running…", "done": "finished", "failed": "failed",
+                                      "unknown": "status unknown (not started by this server)", None: "never run"}[v["state"]])
+            if s:
+                t = pd.DataFrame([dict(step=x["label"], script=x["script"], state=x["state"],
+                                       started=(x["started"] or "–").replace("T", " "),
+                                       seconds=x["seconds"] if x["seconds"] is not None else "–",
+                                       exit=x["returncode"] if x["returncode"] is not None else "–") for x in s["steps"]])
+                st.html(table(t))
+            log = run_pipeline.LOG.read_text(encoding="utf-8", errors="replace") if run_pipeline.LOG.exists() else ""
+            tail = "\n".join(log.splitlines()[-80:])
+            st.html(f'<pre class="wg-log">{esc(tail) or "No log yet."}</pre>')
+        run_log()
+    if LIVE_OK:
+        with st.container(key="card_verify"):
+            v = LIVE["verify"]
+            card_title("Live verification", "saved model re-scored now vs results/metrics.json")
+            t = pd.DataFrame([dict(metric=k, live=a, saved=b, match=("✓" if ((a == b) if isinstance(a, int) else abs(a - b) < 1e-6) else "✕"))
+                              for k, (a, b) in v["checks"].items()], dtype=object)  # object: keep counts as ints
+            st.html(table(t, {"live": lambda x: f"{x:.6f}" if isinstance(x, float) else str(x),
+                              "saved": lambda x: f"{x:.6f}" if isinstance(x, float) else str(x)}))
+            if OLOG and OLOG["reported"]:
+                note(f"Original notebook log: F1 {OLOG['reported']['f1']:.4f}, precision {OLOG['reported']['precision']:.4f}, "
+                     f"recall {OLOG['reported']['recall']:.4f}; metrics.json §2 reproduction: F1 {orig['f1']:.4f}, "
+                     f"precision {orig['precision']:.4f}, recall {orig['recall']:.4f}.")
