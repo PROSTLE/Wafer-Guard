@@ -396,8 +396,7 @@ def original_log(mt: float) -> dict | None:
 @st.cache_data(show_spinner=False)
 def readme(mt: float) -> dict:
     text = README.read_text(encoding="utf-8") if README.exists() else ""
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    title = lines[0].lstrip("# ") if lines else ""
+    title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
     name, _, subtitle = title.partition(": ")
     cmd = re.search(r"## Reproduce everything.*?```bash\n(.*?)```", text, re.S)
     return dict(text=text, name=name, subtitle=subtitle, commands=cmd.group(1).strip() if cmd else "")
@@ -843,8 +842,8 @@ threshold frozen on validation</div></div><div class="wg-stats">{cells}</div></d
         card_title("Training loss", "original notebook, as logged")
         if original_loss_chart(220):
             L = OLOG["loss"]
-            note(f"Reconstruction loss barely moves ({L['recon'].iloc[0]:.3f} → {L['recon'].iloc[-1]:.3f}, the broadcast "
-                 f"bug) while classifier loss falls to {L['clf'].iloc[-1]:.4f}. No validation loss was logged.")
+            note(f"Reconstruction loss {L['recon'].iloc[0]:.3f} → {L['recon'].iloc[-1]:.3f} (the broadcast bug rewards a "
+                 f"constant output) while classifier loss falls to {L['clf'].iloc[-1]:.4f}. No validation loss was logged.")
     with b, st.container(key="card_dist"):
         card_title("Score distribution", f"test block, {rep['n']} wafers")
         if require_live():
@@ -955,8 +954,10 @@ def page_performance() -> None:
              f"of which defects: {tr['test_defects_scored_at_least_0_5']}"),
             ("recon spread ratio", f"{rep['recon_spread_ratio']:.3f}", f"original model: {R['evidence_loss_bug']['original_model_recon_spread_ratio']:.3f}"),
         ]))
-        note("A near-zero classifier loss means the model memorises the balanced training set; on new wafers most scores "
-             "collapse toward 0, which is why the F1-best threshold sits far below 0.5.")
+        note(f"Classifier loss on the SMOTE-balanced training set ends at {tr['final_train_clf_loss']:.2e}, while the median "
+             f"test score is {sci(tr['test_score_median'])}; {tr['test_wafers_scored_at_least_0_5']} test wafers score ≥ 0.5, "
+             f"{tr['test_defects_scored_at_least_0_5']} of them defects. The F1-best threshold from validation is "
+             f"{sci(rep['threshold'])}.")
 
 
 def page_data() -> None:
@@ -1111,8 +1112,10 @@ def page_ablation() -> None:
                            "test_prevalence", "recon_spread", "recon_mse"]],
                       {**{k: ".4f" for k in ["f1_mean", "f1_std", "ap_mean", "precision_mean", "recall_mean",
                                              "recon_spread", "recon_mse"]}, "test_prevalence": ".1%"}))
-        note("<b>recon_spread</b> = how much reconstructions vary between wafers relative to the inputs; it collapses "
-             "toward 0 when the broadcast loss bug is on, even where F1 barely moves.")
+        bug = abl.set_index("config").loc["+ broadcast loss bug"]
+        note(f"<b>recon_spread</b> = how much reconstructions vary between wafers relative to the inputs: "
+             f"{fixed['recon_spread']:.3f} repaired vs {bug['recon_spread']:.3f} with the broadcast loss bug "
+             f"(F1 {fixed['f1_mean']:.3f} vs {bug['f1_mean']:.3f}).")
     runs_df = read_csv(str(ABLATION_RUNS), mtime(ABLATION_RUNS))
     if runs_df is not None:
         with st.container(key="card_abl_runs"):
@@ -1294,7 +1297,8 @@ def page_audit() -> None:
 <li><b>Small numbers:</b> the test block holds {rep["n_defects"]} defects; F1 95% CI is
 {boot["f1_ci95"][0]:.3f}–{boot["f1_ci95"][1]:.3f}.</li>
 <li><b>PS-L shortcut:</b> {leg["fails_in_legacy"]} of {leg["n_legacy"]} PS-L wafers failed in this data; in test the model
-flagged {li["legacy_flagged"]} of {li["legacy_wafers"]}. Catching a real PS-L excursion is untested.</li>
+flagged {li["legacy_flagged"]} of {li["legacy_wafers"]}. {"Catching a real PS-L excursion is untested." if leg["fails_in_legacy"] == 0
+else "Catching a real PS-L excursion rests on very few examples."}</li>
 <li><b>Drift:</b> monthly defect rate: {", ".join(f"{k}: {v:.1%}" for k, v in d["monthly_defect_rate"].items())}.</li>
 <li><b>Model value:</b> logistic regression PR-AUC {R["baseline_logreg"]["ap"]:.3f} vs autoencoder {rep["ap"]:.3f}.</li>
 <li><b>Attribution:</b> re-introducing only “{esc(top["config"])}” lifts F1 from {R["ablation"][0]["f1_mean"]:.3f}
@@ -1385,9 +1389,33 @@ def page_reproduce() -> None:
                      f"precision {orig['precision']:.4f}, recall {orig['recall']:.4f}.")
 
 
+def mermaid(code: str) -> None:
+    """Draw a README Mermaid diagram (st.markdown shows them as plain code)."""
+    st.iframe(f"""<pre class="mermaid" style="margin:0">{esc(code)}</pre>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+mermaid.initialize({{startOnLoad: true, theme: "{'dark' if ss.theme == 'dark' else 'neutral'}",
+                     themeVariables: {{fontFamily: "IBM Plex Sans, sans-serif"}}}});
+</script>""")
+
+
 def page_about() -> None:
+    """README.md as GitHub shows it: centred <p> blocks hold the logo and figures, Mermaid blocks hold diagrams."""
     with st.container(key="card_about"):
-        st.markdown(RD["text"] or "README.md not found.")
+        if not RD["text"]:
+            st.markdown("README.md not found.")
+            return
+        for part in re.split(r'(<p align="center">.*?</p>|```mermaid\n.*?```)', RD["text"], flags=re.S):
+            if part.startswith("```mermaid"):
+                mermaid(part[len("```mermaid\n"):-3])
+            elif part.startswith("<p"):
+                img = re.search(r'<img src="([^"]+)" alt="([^"]*)"', part)
+                if img and (ROOT / img.group(1)).exists():
+                    st.image(str(ROOT / img.group(1)), width=110 if img.group(1).endswith(".svg") else "stretch")
+                elif not img:
+                    note(re.sub(r"<[^>]+>", "", part).strip())
+            elif part.strip():
+                st.markdown(part)
 
 
 # ---------------------------------------------------------------- render
