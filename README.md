@@ -22,3 +22,9 @@ and tensor shapes, and reports what the model really achieves at the natural def
    treated as real measurements, distorting imputation and scaling.
 
 Numbers, evidence and fixes: see [`AUDIT.md`](AUDIT.md).
+
+## No hand-typed results
+`wafer_guard_fixed.ipynb` writes `results/metrics.json`. `AUDIT.md` is generated from that file by
+`scripts/render_audit.py`, and the Release Board only reads it; it also re-scores every wafer live with the saved
+model in `artifacts/` and checks the result against `metrics.json`. Nothing is hard-coded anywhere.
+The evaluator-only file in the task's Drive folder (`secom_legacy_mask_EVALUATOR_ONLY.csv`) was **not** downloaded or used.
