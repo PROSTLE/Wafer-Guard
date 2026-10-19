@@ -957,3 +957,121 @@ def page_performance() -> None:
         ]))
         note("A near-zero classifier loss means the model memorises the balanced training set; on new wafers most scores "
              "collapse toward 0, which is why the F1-best threshold sits far below 0.5.")
+
+
+def page_data() -> None:
+    d, leg, split = R["data"], R["legacy"], R["split"]
+    page_header("Data Analysis", f"<code>data/secom_telemetry_modified.csv</code> · {d['time_start'][:10]} → {d['time_end'][:10]}")
+    st.html(tiles([
+        ("wafers", str(d["n_wafers"]), f"{d['n_pass']} pass · {d['n_fail']} defect"),
+        ("defect rate", f"{d['prevalence']:.2%}", "natural prevalence"),
+        ("sensors", str(d["n_sensors"]), f"{d['n_constant_sensors']} constant overall"),
+        ("missing values", f"{d['missing_rate']:.2%}", "of all sensor cells"),
+        ("PS-L legacy wafers", str(leg["n_legacy"]), f"{leg['share_legacy']:.1%} of wafers · {leg['fails_in_legacy']} failed"),
+        ("model inputs", str(R["preprocessing"]["features_out"]), f"from {R['preprocessing']['features_in']} sensors"),
+    ]))
+    left, right = st.columns([1.6, 1], gap="medium")
+    with left, st.container(key="card_drift"):
+        a, b = st.columns([1.4, 1], vertical_alignment="center")
+        with a:
+            card_title("Defect rate over time", "rolling window, time order")
+        window = b.slider("Window (wafers)", 25, 400, 150, 25, key="drift_window")
+        if require_live():
+            sc = LIVE["scored"]
+            roll = pd.DataFrame({"timestamp": sc["timestamp"],
+                                 "rate": sc["defect"].rolling(window, min_periods=window).mean()}).dropna()
+            bands = pd.DataFrame([dict(split=k, start=pd.Timestamp(v["start"]), end=pd.Timestamp(v["end"]))
+                                  for k, v in split.items()])
+            band = alt.Chart(bands).mark_rect(opacity=0.12).encode(
+                x="start:T", x2="end:T",
+                color=alt.Color("split:N", scale=alt.Scale(domain=["train", "val", "test"],
+                                                           range=[T["repaired"], T["warn"], T["defect"]]),
+                                legend=alt.Legend(title="block")))
+            line = alt.Chart(roll).mark_line(color=T["text"], strokeWidth=1.8).encode(
+                x=alt.X("timestamp:T", title=None), y=alt.Y("rate:Q", title="share failing", axis=alt.Axis(format=".0%")),
+                tooltip=[alt.Tooltip("timestamp:T", format="%Y-%m-%d %H:%M"), alt.Tooltip("rate:Q", format=".1%")])
+            overall = alt.Chart(pd.DataFrame({"y": [d["prevalence"]]})).mark_rule(strokeDash=[5, 4], color=T["muted"]).encode(
+                y="y:Q", tooltip=[alt.Tooltip("y:Q", title="overall", format=".2%")])
+            chart(band + line + overall, 280)
+            note(f"Each point = the defect rate of the previous {window} wafers; dashed = overall {d['prevalence']:.2%}. "
+                 "The rate drifts, so evaluation must respect time order.")
+    with right, st.container(key="card_monthly"):
+        card_title("Monthly defect rate")
+        mdf = pd.DataFrame({"month": list(d["monthly_defect_rate"]), "rate": list(d["monthly_defect_rate"].values())})
+        c = alt.Chart(mdf).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, color=T["repaired"], size=38).encode(
+            x=alt.X("month:N", title=None, axis=alt.Axis(labelAngle=0)), y=alt.Y("rate:Q", title=None, axis=alt.Axis(format=".0%")),
+            tooltip=["month:N", alt.Tooltip("rate:Q", format=".2%")])
+        txt = c.mark_text(dy=-8, color=T["text2"], fontSize=11).encode(text=alt.Text("rate:Q", format=".1%"))
+        chart(c + txt, 280)
+
+    left, right = st.columns([1.3, 1], gap="medium")
+    with left, st.container(key="card_split"):
+        card_title("Chronological split", "train → validation → test")
+        sp = pd.DataFrame(split).T.reset_index(names="block")
+        st.html(table(sp, {"prevalence": ".2%"}))
+        pr = R["preprocessing"]
+        note(f"Preprocessing is fitted on training wafers only: {pr['sensors_dropped_constant_in_train']} sensors constant in "
+             f"training are dropped ({pr['features_in']} → {pr['features_out']} features incl. "
+             f"{pr['features_out'] - (pr['features_in'] - pr['sensors_dropped_constant_in_train'])} PS-L flags). Later wafers sit up "
+             f"to {pr['test_max_abs_z_before_clip']:,.0f}σ from training statistics, so values are clipped at ±{pr['clip_z']:g}σ "
+             f"({pr['test_cells_beyond_clip']} of {pr['test_cells_total']:,} test cells).")
+    with right, st.container(key="card_legacy"):
+        card_title("Legacy probe station PS-L", "sensor_1 firmware codes")
+        cc = pd.DataFrame({"code": list(leg["code_counts"]), "wafers": list(leg["code_counts"].values())})
+        c = alt.Chart(cc).mark_bar(color=T["logreg"], size=34, cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+            x=alt.X("code:N", title="firmware code", axis=alt.Axis(labelAngle=0)), y=alt.Y("wafers:Q", title="wafers"),
+            tooltip=["code:N", "wafers:Q"])
+        chart(c + c.mark_text(dy=-8, color=T["text2"]).encode(text="wafers:Q"), 170)
+        note(f"Real sensor_1 readings span {leg['sensor_1_normal_min']:.0f}–{leg['sensor_1_normal_max']:.0f}; codes appear on "
+             f"PS-L wafers only ({leg['codes_outside_legacy']} outside). Defect rate PS-L {leg['defect_rate_legacy']:.1%} vs "
+             f"others {leg['defect_rate_normal']:.1%}.")
+
+    with st.container(key="card_sensor"):
+        card_title("Sensor lookup", "raw readings by class")
+        if require_live():
+            raw, pre, names = LIVE["raw"], LIVE["pre"], LIVE["feature_names"]
+            sensors = [c for c in raw.columns if c.startswith("sensor_")]
+            if ss.get("sensor_pick") not in sensors:
+                ss.sensor_pick = sensors[0]
+            a, b = st.columns([1, 3], gap="medium")
+            sensor = a.selectbox("Sensor", sensors, key="sensor_pick")
+            is_leg = raw["sensor_0"].eq(0.0)
+            mask = ~is_leg if sensor in ("sensor_0", "sensor_1") else pd.Series(True, index=raw.index)
+            vals, y = raw.loc[mask, sensor], (raw.loc[mask, "label"] == 1).astype(int)
+            kept = sensor in names
+            j = names.index(sensor) if kept else None
+            with a:
+                st.html(tiles([
+                    ("status", "model input" if kept else "dropped", "constant in training" if not kept else "z-scored, clipped"),
+                    ("missing", f"{raw[sensor].isna().mean():.1%}", "of all wafers"),
+                    ("train mean ± std", f"{pre.mean_[j]:.4g}" if kept else "–", f"± {pre.std_[j]:.4g}" if kept else ""),
+                    ("mean pass / defect", f"{vals[y == 0].mean():.4g}", f"defect {vals[y == 1].mean():.4g}"),
+                ]))
+            with b:
+                v = vals.dropna()
+                if v.nunique() <= 1:
+                    note(f"{sensor} takes a single value ({v.iloc[0] if len(v) else 'none'}), so there is nothing to plot.")
+                else:
+                    edges = np.histogram_bin_edges(v, bins=40)
+                    rows = []
+                    for cls, name in [(0, "Pass"), (1, "Defect")]:
+                        cnt, _ = np.histogram(v[y.loc[v.index] == cls], edges)
+                        rows += [dict(x0=e0, x1=e1, share=c_ / max(cnt.sum(), 1), count=int(c_), cls=name)
+                                 for e0, e1, c_ in zip(edges[:-1], edges[1:], cnt)]
+                    h = pd.DataFrame(rows)
+                    c = alt.Chart(h[h["count"] > 0]).mark_bar(opacity=0.7, binSpacing=0).encode(
+                        x=alt.X("x0:Q", title=f"{sensor} reading"), x2="x1:Q",
+                        y=alt.Y("share:Q", stack=None, title="share of class", axis=alt.Axis(format=".0%")), y2=alt.datum(0),
+                        color=alt.Color("cls:N", scale=alt.Scale(domain=["Pass", "Defect"], range=[T["normal"], T["defect"]]),
+                                        legend=alt.Legend(title=None)),
+                        tooltip=["cls:N", alt.Tooltip("x0:Q", format=".4g"), alt.Tooltip("x1:Q", format=".4g"), "count:Q"])
+                    chart(c, 250)
+                    if sensor in ("sensor_0", "sensor_1"):
+                        note("PS-L wafers are excluded here: their value is a sentinel / firmware code, not a reading.")
+
+    with st.expander("Notebook figures"):
+        a, b = st.columns(2)
+        with a:
+            figure("01_legacy_sensor_1", f"{leg['n_legacy']} PS-L wafers report firmware codes instead of readings.")
+        with b:
+            figure("02_defect_rate_drift", "The defect rate drifts over time, so evaluation must respect time order.")
