@@ -1161,3 +1161,85 @@ def page_walk_forward() -> None:
         card_title("Folds")
         st.html(table(folds.drop(columns=["fold_label"]),
                       {"prevalence": ".1%", "threshold": sci, **{k: ".3f" for k in ["precision", "recall", "f1", "ap", "roc_auc"]}}))
+
+
+def page_explorer() -> None:
+    page_header("Wafer Explorer", "Every wafer, re-scored live by the saved repaired model "
+                f"(<code>artifacts/</code>). Threshold {rep['threshold']:.2e}, frozen from validation.")
+    if not require_live():
+        return
+    sc = LIVE["scored"]
+    with st.container(key="card_filters"):
+        a, b, c, d, e = st.columns([1.6, 1, 1, 1, 1.3])
+        splits = a.multiselect("Block", ["train", "val", "test"], default=["train", "val", "test"], key="ex_split")
+        actual = b.selectbox("Actual", ["All", "Defect", "Pass"], key="ex_actual")
+        decision = c.selectbox("Decision", ["All", "Flagged", "Not flagged"], key="ex_decision")
+        psl = d.selectbox("PS-L", ["All", "PS-L only", "Exclude PS-L"], key="ex_psl")
+        sort = e.selectbox("Sort", ["Newest first", "Oldest first", "Highest score", "Highest reconstruction error"],
+                           key="ex_sort")
+    f = sc[sc["split"].isin(splits)]
+    if actual != "All":
+        f = f[f["defect"] == (1 if actual == "Defect" else 0)]
+    if decision != "All":
+        f = f[f["flagged"] == (decision == "Flagged")]
+    if psl != "All":
+        f = f[f["legacy"] == (psl == "PS-L only")]
+    by, asc = {"Newest first": ("timestamp", False), "Oldest first": ("timestamp", True),
+               "Highest score": ("score", False), "Highest reconstruction error": ("recon_mse", False)}[sort]
+    f = f.sort_values(by, ascending=asc)
+    size = 15
+    if ss.pop("ex_jump", False) and ss.get("ex_pick") in f["row"].tolist():  # arrived from search: show its page
+        ss.ex_page = f["row"].tolist().index(ss.ex_pick) // size + 1
+
+    left, right = st.columns([1.5, 1], gap="medium")
+    with left, st.container(key="card_wafers"):
+        pages = max(1, math.ceil(len(f) / size))
+        if ss.get("ex_page", 1) > pages:
+            ss.ex_page = 1
+        h, p = st.columns([2.2, 1], vertical_alignment="bottom")
+        with h:
+            card_title("Wafers", f"{len(f)} match · {int(f['defect'].sum())} defects · {int(f['flagged'].sum())} flagged")
+        page = p.number_input(f"Page (of {pages})", 1, pages, key="ex_page")
+        chunk = f.iloc[(page - 1) * size: page * size]
+        st.html(wafers_table(chunk, ss.get("ex_pick")))
+        out = f.assign(outcome=[outcome(x, y) for x, y in zip(f["defect"], f["flagged"])])
+        st.download_button("Download filtered wafers (CSV)", out.to_csv(index=False).encode("utf-8"),
+                           file_name="wafer_guard_scores.csv", mime="text/csv", icon=":material/download:")
+        note("Wafer # = position in the CSV (0 = first data row). Train-block scores are in-sample.")
+    with right, st.container(key="card_wafer"):
+        options = f["row"].tolist()
+        if not options:
+            note("No wafers match the filters.")
+            return
+        if ss.get("ex_pick") not in options:
+            ss.ex_pick = options[0]
+        lookup = f.set_index("row")
+        pick = st.selectbox("Wafer", options, key="ex_pick",
+                            format_func=lambda r: f"#{r} · {lookup.at[r, 'timestamp']:%Y-%m-%d %H:%M} · "
+                                                  f"{'defect' if lookup.at[r, 'defect'] else 'pass'}")
+        i = int(sc.index[sc["row"] == pick][0])
+        w = sc.loc[i]
+        raw = LIVE["raw"].iloc[i]
+        o = outcome(w["defect"], w["flagged"])
+        test_recon = sc.loc[sc["split"] == "test", "recon_mse"].median()
+        code = f" · code {raw['sensor_1']:.0f}" if w["legacy"] else ""
+        st.html(tiles([
+            ("score", sci(w["score"]), f"{w['score'] / rep['threshold']:.2g}× threshold"),
+            ("decision", "flag" if w["flagged"] else "pass", f"actual: {'defect' if w['defect'] else 'pass'} {outcome_chip(o)}"),
+            ("reconstruction MSE", f"{w['recon_mse']:.3f}", f"test median {test_recon:.3f}"),
+            ("block", w["split"], f"{w['timestamp']:%Y-%m-%d %H:%M}"),
+            ("station", "PS-L legacy" if w["legacy"] else "current", code.strip(" ·") or "real sensor_0/1 readings"),
+        ]))
+        a, b = st.columns([1, 0.16], vertical_alignment="center")
+        with a:
+            fingerprint(i, 250)
+        b.html(z_legend(LIVE["pre"].clip_z, 200))
+        n = len(LIVE["pre"].mean_)
+        z = LIVE["X"][i, :n]
+        names = LIVE["feature_names"][:n]
+        top = np.argsort(-np.abs(z))[:8]
+        t = pd.DataFrame({"sensor": [names[k] for k in top], "raw": [raw[names[k]] for k in top],
+                          "train mean": LIVE["pre"].mean_[top], "train std": LIVE["pre"].std_[top], "z (input)": z[top]})
+        st.html(table(t, {"raw": ".4g", "train mean": ".4g", "train std": ".4g", "z (input)": "+.2f"}))
+        note("Sensors furthest from training statistics for this wafer (|z| capped at "
+             f"{LIVE['pre'].clip_z:g}σ; missing readings enter the model as 0).")
