@@ -1075,3 +1075,54 @@ def page_data() -> None:
             figure("01_legacy_sensor_1", f"{leg['n_legacy']} PS-L wafers report firmware codes instead of readings.")
         with b:
             figure("02_defect_rate_drift", "The defect rate drifts over time, so evaluation must respect time order.")
+
+
+def page_ablation() -> None:
+    page_header("Ablation Study", "Start from the repaired pipeline and re-introduce one original defect at a time "
+                f"({len(R['config']['eval_seeds'])} training seeds each). The last row switches every defect back on.")
+    abl = pd.DataFrame(R["ablation"])
+    fixed = abl.iloc[0]                       # notebook §7: first row = repaired, last row = all defects together
+    top = abl.iloc[1:-1].sort_values("f1_mean").iloc[-1]
+    st.html(tiles([
+        ("repaired F1", f"{fixed['f1_mean']:.3f}", f"± {fixed['f1_std']:.3f} over {len(R['config']['eval_seeds'])} seeds"),
+        ("largest single-defect jump", f"{top['f1_mean']:.3f}", esc(top["config"])),
+        ("all defects together", f"{abl.iloc[-1]['f1_mean']:.3f}", f"test prevalence {abl.iloc[-1]['test_prevalence']:.0%}"),
+        ("release gate", f"{gate['gate_f1']:.2f}", "F1 required"),
+    ]))
+    with st.container(key="card_abl"):
+        card_title("Re-introducing each defect into the repaired pipeline", "bar = mean test F1, whisker = ±1 std")
+        abl["kind"] = ["repaired" if c == fixed["config"] else "defect re-introduced" for c in abl["config"]]
+        abl["lo"], abl["hi"] = abl["f1_mean"] - abl["f1_std"], abl["f1_mean"] + abl["f1_std"]
+        y = alt.Y("config:N", sort=abl["config"].tolist(), title=None, axis=alt.Axis(labelLimit=320))
+        bars = alt.Chart(abl).mark_bar(size=20, cornerRadiusEnd=4).encode(
+            x=alt.X("f1_mean:Q", title="test F1", scale=alt.Scale(domain=[0, 1.05])), y=y,
+            color=alt.Color("kind:N", scale=alt.Scale(domain=["repaired", "defect re-introduced"],
+                                                      range=[T["repaired"], T["original"]]), legend=alt.Legend(title=None)),
+            tooltip=[alt.Tooltip("config:N", title="configuration"), alt.Tooltip("f1_mean:Q", title="F1 mean", format=".3f"),
+                     alt.Tooltip("f1_std:Q", title="F1 std", format=".3f"), alt.Tooltip("ap_mean:Q", title="PR-AUC", format=".3f"),
+                     alt.Tooltip("test_prevalence:Q", title="test defect rate", format=".1%"),
+                     alt.Tooltip("recon_spread:Q", title="reconstruction spread", format=".3f")])
+        whiskers = alt.Chart(abl).mark_rule(color=T["text2"]).encode(x="lo:Q", x2="hi:Q", y=y)
+        labels = alt.Chart(abl).mark_text(align="left", dx=6, color=T["text2"], fontSize=11).encode(
+            x="hi:Q", y=y, text=alt.Text("f1_mean:Q", format=".3f"))
+        gate_rule = alt.Chart(pd.DataFrame({"x": [gate["gate_f1"]]})).mark_rule(color=T["muted"], strokeDash=[5, 4]).encode(x="x:Q")
+        chart(bars + whiskers + labels + gate_rule, 340)
+        st.html(table(abl[["config", "f1_mean", "f1_std", "ap_mean", "precision_mean", "recall_mean",
+                           "test_prevalence", "recon_spread", "recon_mse"]],
+                      {**{k: ".4f" for k in ["f1_mean", "f1_std", "ap_mean", "precision_mean", "recall_mean",
+                                             "recon_spread", "recon_mse"]}, "test_prevalence": ".1%"}))
+        note("<b>recon_spread</b> = how much reconstructions vary between wafers relative to the inputs; it collapses "
+             "toward 0 when the broadcast loss bug is on, even where F1 barely moves.")
+    runs_df = read_csv(str(ABLATION_RUNS), mtime(ABLATION_RUNS))
+    if runs_df is not None:
+        with st.container(key="card_abl_runs"):
+            card_title("Every run", f"{len(runs_df)} runs from results/ablation_runs.csv")
+            dots = alt.Chart(runs_df).mark_circle(size=70, opacity=0.85).encode(
+                x=alt.X("f1:Q", title="test F1", scale=alt.Scale(domain=[0, 1.05])),
+                y=alt.Y("config:N", sort=abl["config"].tolist(), title=None, axis=alt.Axis(labelLimit=320)),
+                color=alt.Color("seed:N", legend=alt.Legend(title="seed"),
+                                scale=alt.Scale(range=[T["repaired"], T["original"], T["violet"], T["warn"], T["good"]])),
+                tooltip=["config:N", "seed:N", alt.Tooltip("f1:Q", format=".3f"), alt.Tooltip("ap:Q", format=".3f"),
+                         alt.Tooltip("precision:Q", format=".3f"), alt.Tooltip("recall:Q", format=".3f"),
+                         alt.Tooltip("threshold:Q", format=".2e")])
+            chart(dots, 320)
